@@ -1,24 +1,88 @@
-const API_URL = "http://127.0.0.1:8000";
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  "http://127.0.0.1:8000";
 
 export async function analyzeImage(file) {
   if (!file) {
-    throw new Error("No image selected");
+    throw new Error("No image selected.");
   }
 
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${API_URL}/analyze`, {
-    method: "POST",
-    body: formData,
-  });
+  let response;
 
-  if (!response.ok) {
-    const errorText = await response.text();
+  try {
+    response = await fetch(
+      `${API_URL}/analyze`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  } catch (error) {
+    console.error(
+      "TRUSTVERIFY API connection error:",
+      error
+    );
+
     throw new Error(
-      `Analysis failed (${response.status}): ${errorText}`
+      "Unable to connect to the TrustVerify analysis server."
     );
   }
 
-  return await response.json();
+  let data = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(
+      "Backend returned an invalid response."
+    );
+  }
+
+  if (!response.ok) {
+    const message =
+      data?.detail ||
+      data?.message ||
+      `Analysis failed with status ${response.status}.`;
+
+    const formattedMessage =
+      Array.isArray(message)
+        ? message
+            .map(
+              (item) =>
+                item?.msg ||
+                JSON.stringify(item)
+            )
+            .join(", ")
+        : String(message);
+
+    throw new Error(
+      formattedMessage
+    );
+  }
+
+  return data;
+}
+
+export function getRiskColor(level) {
+  switch (
+    String(level || "").toLowerCase()
+  ) {
+    case "low":
+      return "green";
+
+    case "medium":
+      return "yellow";
+
+    case "high":
+      return "orange";
+
+    case "critical":
+      return "red";
+
+    default:
+      return "gray";
+  }
 }
