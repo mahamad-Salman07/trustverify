@@ -45,31 +45,53 @@ app = FastAPI(
     version="2.0.0"
 )
 
-
 # ============================================================
 # CORS
 # ============================================================
+
+ALLOWED_ORIGINS = [
+    # Local development
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+
+    # TRUSTVERIFY production frontend
+    "https://trustverify-7kfudy4re-spritsquad.vercel.app",
+]
+
+
+# Optional additional frontend URL from Render environment
+extra_frontend_url = os.getenv(
+    "TRUSTVERIFY_FRONTEND_URL",
+    ""
+).strip()
+
+if extra_frontend_url:
+    for origin in extra_frontend_url.split(","):
+        origin = origin.strip()
+
+        if origin and origin not in ALLOWED_ORIGINS:
+            ALLOWED_ORIGINS.append(origin)
+
+
 app.add_middleware(
     CORSMiddleware,
 
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+    allow_origins=ALLOWED_ORIGINS,
 
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-
-        "http://localhost:3000",
-        "http://127.0.0.1:3000"
-    ],
+    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)?vercel\.app",
 
     allow_credentials=True,
 
     allow_methods=["*"],
 
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
-
 
 # ============================================================
 # DIRECTORIES
