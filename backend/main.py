@@ -44,13 +44,11 @@ app = FastAPI(
 
     version="2.0.0"
 )
-
 # ============================================================
 # CORS
 # ============================================================
 
 ALLOWED_ORIGINS = [
-
     # Local development
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -61,8 +59,11 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 
-    # Production Vercel
+    # TRUSTVERIFY production frontend
     "https://trustverify-7kfudy4re-spritsquad.vercel.app",
+
+    # Current Vercel preview
+    "https://trustverify-fo0fbjpik-spritsquad.vercel.app",
 ]
 
 
@@ -71,7 +72,12 @@ app.add_middleware(
 
     allow_origins=ALLOWED_ORIGINS,
 
-    allow_credentials=True,
+    # Allow Vercel preview deployments too
+    allow_origin_regex=(
+        r"^https://[a-zA-Z0-9-]+\.vercel\.app$"
+    ),
+
+    allow_credentials=False,
 
     allow_methods=["*"],
 
@@ -79,6 +85,7 @@ app.add_middleware(
 
     max_age=600,
 )
+
 # ============================================================
 # DIRECTORIES
 # ============================================================
