@@ -1,10 +1,23 @@
-import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import {
+  useRef,
+  useState,
+} from "react";
+
+import {
+  useNavigate,
+} from "react-router-dom";
+
 import "../style/upload.css";
+
+import {
+  analyzeImageWithBrowserAI,
+} from "../services/browserAiDetector";
+
 
 const API_URL =
   import.meta.env.VITE_API_URL ||
   "http://127.0.0.1:8000";
+
 
 const ALLOWED_TYPES = [
   "image/jpeg",
@@ -14,241 +27,624 @@ const ALLOWED_TYPES = [
   "image/tiff",
 ];
 
-const MAX_SIZE = 100 * 1024 * 1024;
+
+const MAX_SIZE =
+  100 * 1024 * 1024;
+
 
 export default function Upload() {
-  const fileInputRef = useRef(null);
-  const navigate = useNavigate();
 
-  const [file, setFile] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const fileInputRef =
+    useRef(null);
 
-  const validateFile = (selectedFile) => {
-    if (!selectedFile) return false;
+  const navigate =
+    useNavigate();
 
-    if (!ALLOWED_TYPES.includes(selectedFile.type)) {
-      setError("Please select JPG, PNG, WEBP, BMP, or TIFF image.");
+
+  const [file, setFile] =
+    useState(null);
+
+  const [dragging, setDragging] =
+    useState(false);
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [analysisStage, setAnalysisStage] =
+    useState("");
+
+
+  // ==========================================================
+  // VALIDATE FILE
+  // ==========================================================
+
+  const validateFile = (
+    selectedFile
+  ) => {
+
+    if (!selectedFile) {
       return false;
     }
 
-    if (selectedFile.size > MAX_SIZE) {
-      setError("File size must be 100 MB or less.");
+
+    if (
+      !ALLOWED_TYPES.includes(
+        selectedFile.type
+      )
+    ) {
+
+      setError(
+        "Please select JPG, PNG, WEBP, BMP, or TIFF image."
+      );
+
       return false;
     }
+
+
+    if (
+      selectedFile.size >
+      MAX_SIZE
+    ) {
+
+      setError(
+        "File size must be 100 MB or less."
+      );
+
+      return false;
+    }
+
 
     setError("");
-    setFile(selectedFile);
+
+    setFile(
+      selectedFile
+    );
+
     return true;
   };
 
-  const handleFileChange = (event) => {
-    validateFile(event.target.files?.[0]);
+
+  // ==========================================================
+  // FILE INPUT
+  // ==========================================================
+
+  const handleFileChange = (
+    event
+  ) => {
+
+    validateFile(
+      event.target.files?.[0]
+    );
   };
 
-  const handleDrop = (event) => {
+
+  // ==========================================================
+  // DRAG & DROP
+  // ==========================================================
+
+  const handleDrop = (
+    event
+  ) => {
+
     event.preventDefault();
+
     setDragging(false);
 
-    const droppedFile = event.dataTransfer.files?.[0];
-    validateFile(droppedFile);
+
+    const droppedFile =
+      event.dataTransfer.files?.[0];
+
+
+    validateFile(
+      droppedFile
+    );
   };
 
+
+  // ==========================================================
+  // ANALYZE
+  // ==========================================================
+
   const handleAnalyze = async () => {
+
     if (!file) {
-      setError("Please select an image first.");
+
+      setError(
+        "Please select an image first."
+      );
+
       return;
     }
 
+
     setLoading(true);
+
     setError("");
 
+    setAnalysisStage(
+      "Loading AI detector..."
+    );
+
+
     try {
-      const formData = new FormData();
-      formData.append("file", file);
 
-      const response = await fetch(`${API_URL}/analyze`, {
-        method: "POST",
-        body: formData,
-      });
+      // ======================================================
+      // STEP 1
+      // Browser-side AI analysis
+      // ======================================================
 
-      const data = await response.json();
+      console.log(
+        "TRUSTVERIFY: Starting browser AI analysis..."
+      );
 
-      if (!response.ok) {
+
+      const browserAiResult =
+        await analyzeImageWithBrowserAI(
+          file
+        );
+
+
+      console.log(
+        "TRUSTVERIFY browser AI result:",
+        browserAiResult
+      );
+
+
+      // ======================================================
+      // STEP 2
+      // Send image + browser AI result to backend
+      // ======================================================
+
+      setAnalysisStage(
+        "Running forensic analysis..."
+      );
+
+
+      const formData =
+        new FormData();
+
+
+      formData.append(
+        "file",
+        file
+      );
+
+
+      formData.append(
+        "ai_result_json",
+        JSON.stringify(
+          browserAiResult
+        )
+      );
+
+
+      console.log(
+        "TRUSTVERIFY backend:",
+        `${API_URL}/analyze`
+      );
+
+
+      const response =
+        await fetch(
+          `${API_URL}/analyze`,
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+
+      let data = null;
+
+
+      try {
+
+        data =
+          await response.json();
+
+      } catch {
+
         throw new Error(
-          data?.detail || "Image analysis failed."
+          "Backend returned an invalid response."
         );
       }
 
-      console.log("TRUSTVERIFY analysis:", data);
 
-      /*
-       * Your backend returns:
-       * file_id
-       * report
-       * summary
-       * metadata
-       * forensics
-       * ela
-       * ai_analysis
-       * risk
-       * evidence
-       */
+      // ======================================================
+      // BACKEND ERROR
+      // ======================================================
 
-      if (!data.file_id) {
-        throw new Error("Backend did not return a verification ID.");
+      if (!response.ok) {
+
+        const message =
+          data?.detail ||
+          data?.message ||
+          `Analysis failed (${response.status})`;
+
+
+        const formattedMessage =
+          Array.isArray(message)
+
+            ? message
+                .map(
+                  (item) =>
+                    item?.msg ||
+                    JSON.stringify(item)
+                )
+                .join(", ")
+
+            : String(message);
+
+
+        throw new Error(
+          formattedMessage
+        );
       }
 
-      navigate(`/report/${data.file_id}`, {
-        state: {
-          report: data,
-        },
-      });
+
+      // ======================================================
+      // SUCCESS
+      // ======================================================
+
+      console.log(
+        "TRUSTVERIFY final analysis:",
+        data
+      );
+
+
+      if (!data?.file_id) {
+
+        throw new Error(
+          "Backend did not return a verification ID."
+        );
+      }
+
+
+      setAnalysisStage(
+        "Preparing forensic report..."
+      );
+
+
+      // ======================================================
+      // OPEN REPORT
+      // ======================================================
+
+      navigate(
+        `/report/${data.file_id}`,
+        {
+          state: {
+            report: data,
+          },
+        }
+      );
+
+
     } catch (err) {
-      console.error("Analysis error:", err);
+
+      console.error(
+        "TRUSTVERIFY analysis error:",
+        err
+      );
+
 
       setError(
-        err.message ||
-          "Unable to connect to the TrustVerify analysis server."
+        err?.message ||
+        "Unable to analyze the image."
       );
+
+
     } finally {
+
       setLoading(false);
+
+      setAnalysisStage("");
     }
   };
+
+
+  // ==========================================================
+  // REMOVE FILE
+  // ==========================================================
 
   const removeFile = () => {
+
     setFile(null);
+
     setError("");
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    setAnalysisStage("");
+
+
+    if (
+      fileInputRef.current
+    ) {
+
+      fileInputRef.current.value =
+        "";
     }
   };
 
+
+  // ==========================================================
+  // UI
+  // ==========================================================
+
   return (
-    <main className="upload-page">
-      <div className="upload-background">
-        <div className="glow glow-one"></div>
-        <div className="glow glow-two"></div>
-        <div className="grid-overlay"></div>
+
+    <main
+      className="upload-page"
+    >
+
+      <div
+        className="upload-background"
+      >
+
+        <div
+          className="glow glow-one"
+        />
+
+        <div
+          className="glow glow-two"
+        />
+
+        <div
+          className="grid-overlay"
+        />
+
       </div>
 
-      <section className="upload-container">
 
-        <div className="upload-header">
-          <div className="brand">
-            <span className="brand-mark">✦</span>
+      <section
+        className="upload-container"
+      >
+
+        {/* ==================================================
+            HEADER
+        ================================================== */}
+
+        <div
+          className="upload-header"
+        >
+
+          <div
+            className="brand"
+          >
+
+            <span
+              className="brand-mark"
+            >
+              ✦
+            </span>
+
             TRUSTVERIFY
+
           </div>
 
-          <div className="header-badge">
-            <span className="status-dot"></span>
+
+          <div
+            className="header-badge"
+          >
+
+            <span
+              className="status-dot"
+            />
+
             AI FORENSICS
+
           </div>
+
         </div>
 
-        <div className="hero-section">
 
-          <div className="eyebrow">
+        {/* ==================================================
+            HERO
+        ================================================== */}
+
+        <div
+          className="hero-section"
+        >
+
+          <div
+            className="eyebrow"
+          >
             TRUSTVERIFY / AI FORENSICS
           </div>
+
 
           <h1>
             Verify your <span>image.</span>
           </h1>
 
-          <p className="hero-description">
-            Upload an image and TrustVerify will analyze its metadata,
-            forensic characteristics, ELA patterns, and AI-generated
-            image indicators.
+
+          <p
+            className="hero-description"
+          >
+
+            Upload an image and TrustVerify
+            will analyze metadata, forensic
+            characteristics, ELA patterns,
+            manipulation indicators,
+            screenshot context, fingerprints,
+            and AI-generated image signals.
+
           </p>
 
-          <div className="analysis-pills">
-            <span>Metadata</span>
-            <span>Forensics</span>
-            <span>ELA</span>
-            <span>AI Detection</span>
+
+          <div
+            className="analysis-pills"
+          >
+
+            <span>
+              Metadata
+            </span>
+
+            <span>
+              Forensics
+            </span>
+
+            <span>
+              ELA
+            </span>
+
+            <span>
+              AI Detection
+            </span>
+
           </div>
 
         </div>
 
+
+        {/* ==================================================
+            DROP ZONE
+        ================================================== */}
+
         <div
-          className={`drop-zone ${
-            dragging ? "dragging" : ""
-          } ${file ? "has-file" : ""}`}
+          className={`
+            drop-zone
+            ${dragging ? "dragging" : ""}
+            ${file ? "has-file" : ""}
+          `}
           onDragOver={(event) => {
+
             event.preventDefault();
-            setDragging(true);
+
+            if (!loading) {
+              setDragging(true);
+            }
           }}
-          onDragLeave={() => setDragging(false)}
+          onDragLeave={() =>
+            setDragging(false)
+          }
           onDrop={handleDrop}
         >
 
           {!file ? (
+
             <>
-              <div className="upload-icon">
+
+              <div
+                className="upload-icon"
+              >
                 ↑
               </div>
 
-              <h2>Drop your image here</h2>
 
-              <p className="drop-subtitle">
+              <h2>
+                Drop your image here
+              </h2>
+
+
+              <p
+                className="drop-subtitle"
+              >
                 or choose a file from your computer
               </p>
+
 
               <button
                 className="choose-button"
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                onClick={() =>
+                  fileInputRef.current?.click()
+                }
               >
                 Choose image
               </button>
+
 
               <input
                 ref={fileInputRef}
                 type="file"
                 accept=".jpg,.jpeg,.png,.webp,.bmp,.tiff"
-                onChange={handleFileChange}
+                onChange={
+                  handleFileChange
+                }
                 hidden
               />
 
-              <div className="file-info">
+
+              <div
+                className="file-info"
+              >
+
                 <span>JPG</span>
                 <span>PNG</span>
                 <span>WEBP</span>
                 <span>BMP</span>
                 <span>TIFF</span>
+
               </div>
 
-              <div className="max-size">
+
+              <div
+                className="max-size"
+              >
                 Maximum 100 MB
               </div>
-            </>
-          ) : (
-            <div className="selected-file">
 
-              <div className="selected-icon">
+            </>
+
+          ) : (
+
+            <div
+              className="selected-file"
+            >
+
+              <div
+                className="selected-icon"
+              >
                 ✓
               </div>
 
-              <div className="selected-details">
-                <span className="selected-label">
+
+              <div
+                className="selected-details"
+              >
+
+                <span
+                  className="selected-label"
+                >
                   IMAGE READY FOR ANALYSIS
                 </span>
 
-                <h3>{file.name}</h3>
+
+                <h3>
+                  {file.name}
+                </h3>
+
 
                 <p>
-                  {file.type || "image"} •{" "}
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
+
+                  {file.type ||
+                    "image"}
+
+                  {" • "}
+
+                  {(
+                    file.size /
+                    1024 /
+                    1024
+                  ).toFixed(2)}
+
+                  {" MB"}
+
                 </p>
+
               </div>
+
 
               <button
                 className="remove-button"
                 type="button"
-                onClick={removeFile}
+                disabled={loading}
+                onClick={
+                  removeFile
+                }
               >
                 Remove
               </button>
@@ -258,78 +654,195 @@ export default function Upload() {
 
         </div>
 
+
+        {/* ==================================================
+            ERROR
+        ================================================== */}
+
         {error && (
-          <div className="error-message">
-            <span>!</span>
+
+          <div
+            className="error-message"
+          >
+
+            <span>
+              !
+            </span>
+
             {error}
+
           </div>
+
         )}
 
+
+        {/* ==================================================
+            ANALYZE BUTTON
+        ================================================== */}
+
         <button
-          className={`analyze-button ${
-            loading ? "loading" : ""
-          }`}
+          className={`
+            analyze-button
+            ${loading ? "loading" : ""}
+          `}
           type="button"
-          disabled={!file || loading}
-          onClick={handleAnalyze}
+          disabled={
+            !file ||
+            loading
+          }
+          onClick={
+            handleAnalyze
+          }
         >
+
           {loading ? (
+
             <>
-              <span className="spinner"></span>
-              Analyzing image...
+
+              <span
+                className="spinner"
+              />
+
+              {analysisStage ||
+                "Analyzing image..."}
+
             </>
+
           ) : (
+
             <>
+
               Analyze image
-              <span className="arrow">→</span>
+
+              <span
+                className="arrow"
+              >
+                →
+              </span>
+
             </>
+
           )}
+
         </button>
 
-        <div className="security-note">
-          <span className="lock">🔒</span>
+
+        {/* ==================================================
+            SECURITY
+        ================================================== */}
+
+        <div
+          className="security-note"
+        >
+
+          <span
+            className="lock"
+          >
+            🔒
+          </span>
+
 
           <div>
-            <strong>Secure forensic processing</strong>
+
+            <strong>
+              Secure forensic processing
+            </strong>
+
+
             <p>
-              Your image is processed through the TrustVerify
-              forensic analysis pipeline.
+              Your image is processed through
+              the TrustVerify forensic analysis
+              pipeline.
             </p>
+
           </div>
+
         </div>
 
-        <div className="pipeline">
 
-          <div className="pipeline-title">
+        {/* ==================================================
+            PIPELINE
+        ================================================== */}
+
+        <div
+          className="pipeline"
+        >
+
+          <div
+            className="pipeline-title"
+          >
             ANALYSIS PIPELINE
           </div>
 
-          <div className="pipeline-items">
 
-            <div className="pipeline-item">
-              <span>01</span>
+          <div
+            className="pipeline-items"
+          >
+
+            <div
+              className="pipeline-item"
+            >
+
+              <span>
+                01
+              </span>
+
               Metadata
+
             </div>
 
-            <div className="pipeline-line"></div>
 
-            <div className="pipeline-item">
-              <span>02</span>
+            <div
+              className="pipeline-line"
+            />
+
+
+            <div
+              className="pipeline-item"
+            >
+
+              <span>
+                02
+              </span>
+
               Forensics
+
             </div>
 
-            <div className="pipeline-line"></div>
 
-            <div className="pipeline-item">
-              <span>03</span>
+            <div
+              className="pipeline-line"
+            />
+
+
+            <div
+              className="pipeline-item"
+            >
+
+              <span>
+                03
+              </span>
+
               ELA
+
             </div>
 
-            <div className="pipeline-line"></div>
 
-            <div className="pipeline-item">
-              <span>04</span>
+            <div
+              className="pipeline-line"
+            />
+
+
+            <div
+              className="pipeline-item"
+            >
+
+              <span>
+                04
+              </span>
+
               AI Detection
+
             </div>
 
           </div>
@@ -337,6 +850,7 @@ export default function Upload() {
         </div>
 
       </section>
+
     </main>
   );
 }

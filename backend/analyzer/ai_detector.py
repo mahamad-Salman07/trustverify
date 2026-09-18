@@ -3,30 +3,38 @@
 TRUSTVERIFY - AI IMAGE DETECTOR
 ============================================================
 
-Purpose:
-    Detect AI-generated / synthetic images.
+FREE / LOW-MEMORY BACKEND VERSION
 
-Model:
-    delpot/steganograph-ia-detector
+The FastAPI backend does NOT load PyTorch or Transformers.
 
-Expected classes:
-    real
-    ai_generated
+AI inference is performed in the browser using:
 
-Important:
-    This detector is one signal in TrustVerify.
-    It should NOT be treated as absolute proof.
+    onnx-community/ai-image-detect-distilled-ONNX
 
-The result is deliberately conservative for:
-    - screenshots
-    - edited photographs
-    - recompressed images
-    - unknown image sources
+The browser sends the AI result to the backend.
+
+Backend responsibilities remain:
+
+    - Metadata
+    - Forensics
+    - ELA
+    - Manipulation
+    - Recapture
+    - Fingerprinting
+    - Web trace
+    - Evidence fusion
+    - Report generation
+
+IMPORTANT:
+
+This module does not claim an image is AI-generated unless
+an actual browser-side AI result is supplied.
+
 ============================================================
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from PIL import Image
 
@@ -37,7 +45,7 @@ from PIL import Image
 
 MODEL_NAME = os.getenv(
     "TRUSTVERIFY_AI_MODEL",
-    "delpot/steganograph-ia-detector"
+    "onnx-community/ai-image-detect-distilled-ONNX"
 ).strip()
 
 
@@ -58,155 +66,6 @@ REAL_THRESHOLD = float(
 
 
 # ============================================================
-# GLOBAL MODEL
-# ============================================================
-
-_classifier = None
-_model_load_attempted = False
-_model_error: Optional[str] = None
-
-
-# ============================================================
-# LABEL NORMALIZATION
-# ============================================================
-
-def _normalize_label(label: Any) -> str:
-
-    if label is None:
-        return ""
-
-    value = str(label).strip().lower()
-
-    value = value.replace("-", "_")
-    value = value.replace(" ", "_")
-
-    return value
-
-
-def _label_type(label: Any) -> str:
-
-    normalized = _normalize_label(label)
-
-    # Actual labels from this model
-    if normalized in {
-        "ai_generated",
-        "ai",
-        "synthetic",
-        "generated",
-        "fake",
-    }:
-        return "ai"
-
-    if normalized in {
-        "real",
-        "real_image",
-        "real_photo",
-        "real_photograph",
-        "authentic",
-    }:
-        return "real"
-
-    return "unknown"
-
-
-# ============================================================
-# SAFE FLOAT
-# ============================================================
-
-def _safe_float(
-    value: Any,
-    default: float = 0.0
-) -> float:
-
-    try:
-
-        number = float(value)
-
-        if number != number:
-            return default
-
-        if number < 0:
-            return default
-
-        if number > 1:
-            number /= 100.0
-
-        return min(
-            max(number, 0.0),
-            1.0
-        )
-
-    except (
-        TypeError,
-        ValueError
-    ):
-
-        return default
-
-
-# ============================================================
-# LOAD MODEL
-# ============================================================
-
-def _load_model():
-
-    global _classifier
-    global _model_load_attempted
-    global _model_error
-
-    if _model_load_attempted:
-        return _classifier
-
-    _model_load_attempted = True
-
-    if not MODEL_NAME:
-
-        _model_error = (
-            "TRUSTVERIFY_AI_MODEL is not configured."
-        )
-
-        return None
-
-    try:
-
-        from transformers import pipeline
-
-        print("=" * 60)
-        print("TRUSTVERIFY AI DETECTOR")
-        print("=" * 60)
-        print(
-            f"Loading AI detector model: {MODEL_NAME}"
-        )
-
-        _classifier = pipeline(
-            "image-classification",
-            model=MODEL_NAME
-        )
-
-        print(
-            "TRUSTVERIFY: AI detector loaded successfully."
-        )
-
-        print("=" * 60)
-
-    except Exception as error:
-
-        _model_error = str(error)
-
-        _classifier = None
-
-        print(
-            "TRUSTVERIFY: AI detector failed to load."
-        )
-
-        print(
-            f"Reason: {error}"
-        )
-
-    return _classifier
-
-
-# ============================================================
 # IMAGE INFORMATION
 # ============================================================
 
@@ -214,7 +73,7 @@ def _get_image_info(
     file_path: str
 ) -> Dict[str, Any]:
 
-    info = {
+    result = {
         "width": None,
         "height": None,
         "format": None,
@@ -224,16 +83,18 @@ def _get_image_info(
 
     try:
 
-        with Image.open(file_path) as image:
+        with Image.open(
+            file_path
+        ) as image:
 
             width, height = image.size
 
-            info["width"] = width
-            info["height"] = height
-            info["format"] = image.format
-            info["mode"] = image.mode
+            result["width"] = width
+            result["height"] = height
+            result["format"] = image.format
+            result["mode"] = image.mode
 
-            info["megapixels"] = round(
+            result["megapixels"] = round(
                 (
                     width * height
                 ) / 1_000_000,
@@ -241,9 +102,10 @@ def _get_image_info(
             )
 
     except Exception:
+
         pass
 
-    return info
+    return result
 
 
 # ============================================================
@@ -251,56 +113,83 @@ def _get_image_info(
 # ============================================================
 
 def _detect_screenshot_characteristics(
-    file_path: str,
     image_info: Dict[str, Any]
 ) -> Dict[str, Any]:
 
     """
-    This does NOT claim that an image is a screenshot.
+    Detects characteristics commonly associated with
+    screenshots.
 
-    It only identifies characteristics commonly associated
-    with screenshots.
-
-    These characteristics are used to reduce overconfidence,
-    not to declare an image real.
+    This is contextual evidence only.
+    It does not prove an image is a screenshot.
     """
 
     signals = []
+
     score = 0.0
 
-    width = image_info.get("width")
-    height = image_info.get("height")
-    image_format = image_info.get("format")
+    width = image_info.get(
+        "width"
+    )
 
-    if width and height:
+    height = image_info.get(
+        "height"
+    )
 
-        # Common desktop/browser screenshot dimensions
-        common_sizes = {
-            (1920, 1080),
-            (1366, 768),
-            (1536, 864),
-            (1440, 900),
-            (1280, 720),
-            (1600, 900),
-            (2560, 1440),
-            (3840, 2160),
-            (1170, 2532),
-            (1080, 1920),
-            (1290, 2796),
-        }
+    image_format = image_info.get(
+        "format"
+    )
 
-        if (width, height) in common_sizes:
+    # --------------------------------------------------------
+    # Common screen resolutions
+    # --------------------------------------------------------
 
-            signals.append(
-                "Common screen-capture resolution."
-            )
+    common_sizes = {
 
-            score += 0.35
+        (1920, 1080),
+        (1366, 768),
+        (1536, 864),
+        (1440, 900),
+        (1280, 720),
+        (1600, 900),
+        (2560, 1440),
+        (3840, 2160),
 
-        aspect_ratio = width / height
+        (1170, 2532),
+        (1080, 1920),
+        (1290, 2796),
+    }
+
+    if (
+        width,
+        height
+    ) in common_sizes:
+
+        signals.append(
+            "Common screen-capture resolution."
+        )
+
+        score += 0.35
+
+    # --------------------------------------------------------
+    # Aspect ratio
+    # --------------------------------------------------------
+
+    if (
+        width
+        and
+        height
+        and
+        height > 0
+    ):
+
+        ratio = (
+            width /
+            height
+        )
 
         if (
-            1.6 <= aspect_ratio <= 1.9
+            1.60 <= ratio <= 1.90
         ):
 
             signals.append(
@@ -309,13 +198,19 @@ def _detect_screenshot_characteristics(
 
             score += 0.10
 
-        if (
-            0.45 <= aspect_ratio <= 0.60
-            or
-            1.65 <= aspect_ratio <= 2.30
+        elif (
+            0.45 <= ratio <= 0.60
         ):
 
+            signals.append(
+                "Tall display-style aspect ratio."
+            )
+
             score += 0.05
+
+    # --------------------------------------------------------
+    # PNG
+    # --------------------------------------------------------
 
     if image_format == "PNG":
 
@@ -325,630 +220,325 @@ def _detect_screenshot_characteristics(
 
         score += 0.10
 
+    score = min(
+        1.0,
+        score
+    )
+
     return {
-        "possible": score >= 0.35,
-        "score": min(score, 1.0),
-        "signals": signals
+
+        "possible":
+            score >= 0.35,
+
+        "score":
+            round(
+                score,
+                3
+            ),
+
+        "signals":
+            signals
     }
 
 
 # ============================================================
-# NORMALIZE PREDICTIONS
+# NORMALIZE EXTERNAL AI RESULT
 # ============================================================
 
-def _normalize_predictions(
-    predictions: Any
-) -> List[Dict[str, Any]]:
+def normalize_external_ai_result(
+    ai_result: Any
+) -> Dict[str, Any]:
 
-    if predictions is None:
-        return []
-
-    # Handle nested Transformers output
-    if (
-        isinstance(predictions, list)
-        and predictions
-        and isinstance(predictions[0], list)
-    ):
-        predictions = predictions[0]
+    """
+    Normalize browser-side AI output into the structure
+    expected by the TrustVerify evidence-fusion engine.
+    """
 
     if not isinstance(
-        predictions,
+        ai_result,
+        dict
+    ):
+
+        return {
+
+            "available": False,
+
+            "model": MODEL_NAME,
+
+            "prediction": "unknown",
+
+            "ai_probability": None,
+
+            "real_probability": None,
+
+            "confidence": None,
+
+            "labels": [],
+
+            "ai_labels": [],
+
+            "real_labels": [],
+
+            "flags": [
+                "Browser AI result was not supplied."
+            ],
+
+            "message":
+                "AI analysis is unavailable.",
+
+            "error": None,
+
+            "source": "browser"
+        }
+
+    labels = ai_result.get(
+        "labels",
+        []
+    )
+
+    if not isinstance(
+        labels,
         list
     ):
-        return []
 
-    normalized = []
+        labels = []
 
-    for item in predictions:
-
-        if not isinstance(
-            item,
-            dict
-        ):
-            continue
-
-        label = item.get(
-            "label",
-            ""
-        )
-
-        score = _safe_float(
-            item.get(
-                "score",
-                0.0
-            )
-        )
-
-        normalized.append(
-            {
-                "label": str(label),
-                "score": round(
-                    score,
-                    6
-                ),
-                "percentage": round(
-                    score * 100,
-                    2
-                ),
-                "type": _label_type(label)
-            }
-        )
-
-    normalized.sort(
-        key=lambda x: x["score"],
-        reverse=True
+    ai_labels = ai_result.get(
+        "ai_labels",
+        []
     )
 
-    return normalized
-
-
-# ============================================================
-# EXTRACT MODEL SCORES
-# ============================================================
-
-def _extract_scores(
-    predictions: List[Dict[str, Any]]
-):
-
-    ai_score = 0.0
-    real_score = 0.0
-
-    ai_labels = []
-    real_labels = []
-
-    for prediction in predictions:
-
-        label_type = prediction.get(
-            "type",
-            "unknown"
-        )
-
-        score = _safe_float(
-            prediction.get(
-                "score",
-                0.0
-            )
-        )
-
-        if label_type == "ai":
-
-            ai_score = max(
-                ai_score,
-                score
-            )
-
-            ai_labels.append(
-                prediction
-            )
-
-        elif label_type == "real":
-
-            real_score = max(
-                real_score,
-                score
-            )
-
-            real_labels.append(
-                prediction
-            )
-
-    return (
-        ai_score,
-        real_score,
+    if not isinstance(
         ai_labels,
-        real_labels
+        list
+    ):
+
+        ai_labels = []
+
+    real_labels = ai_result.get(
+        "real_labels",
+        []
     )
 
+    if not isinstance(
+        real_labels,
+        list
+    ):
 
-# ============================================================
-# DETERMINE VERDICT
-# ============================================================
+        real_labels = []
 
-def _determine_verdict(
-    ai_score: float,
-    real_score: float,
-    screenshot_possible: bool
-):
-
-    # --------------------------------------------------------
-    # Both classes
-    # --------------------------------------------------------
-
-    if ai_score > 0 and real_score > 0:
-
-        total = (
-            ai_score +
-            real_score
-        )
-
-        normalized_ai = (
-            ai_score / total
-        )
-
-        normalized_real = (
-            real_score / total
-        )
-
-        # ----------------------------------------------------
-        # Strong AI
-        # ----------------------------------------------------
-
-        if (
-            normalized_ai >= AI_THRESHOLD
-        ):
-
-            # Screenshot safeguard:
-            #
-            # We do NOT automatically call it real.
-            # Instead we reduce certainty because the
-            # detector was not trained specifically for
-            # screenshots.
-
-            if screenshot_possible:
-
-                return (
-                    "uncertain",
-                    (
-                        "The AI detector produced a strong "
-                        "synthetic signal, but the image also "
-                        "has screenshot-like characteristics. "
-                        "Additional forensic evidence is "
-                        "recommended before calling it "
-                        "AI-generated."
-                    ),
-                    normalized_ai * 0.65
-                )
-
-            return (
-                "ai-generated",
-                (
-                    "The AI detector found a strong "
-                    "synthetic-image signal."
-                ),
-                normalized_ai
-            )
-
-        # ----------------------------------------------------
-        # Strong REAL
-        # ----------------------------------------------------
-
-        if (
-            normalized_real >= REAL_THRESHOLD
-        ):
-
-            return (
-                "likely-real",
-                (
-                    "The AI detector found a strong "
-                    "real-image signal."
-                ),
-                normalized_real
-            )
-
-        return (
-            "uncertain",
-            (
-                "The AI detector produced mixed or "
-                "inconclusive evidence."
-            ),
-            max(
-                normalized_ai,
-                normalized_real
-            )
-        )
-
-    # --------------------------------------------------------
-    # AI only
-    # --------------------------------------------------------
-
-    if ai_score > 0:
-
-        if ai_score >= AI_THRESHOLD:
-
-            if screenshot_possible:
-
-                return (
-                    "uncertain",
-                    (
-                        "A strong AI-generation signal was "
-                        "detected, but screenshot-like "
-                        "characteristics reduce confidence."
-                    ),
-                    ai_score * 0.65
-                )
-
-            return (
-                "ai-generated",
-                (
-                    "The model produced a strong "
-                    "AI-generation signal."
-                ),
-                ai_score
-            )
-
-        return (
-            "uncertain",
-            (
-                "An AI-generation signal was detected, "
-                "but it is not strong enough for a reliable "
-                "classification."
-            ),
-            ai_score
-        )
-
-    # --------------------------------------------------------
-    # REAL only
-    # --------------------------------------------------------
-
-    if real_score > 0:
-
-        if real_score >= REAL_THRESHOLD:
-
-            return (
-                "likely-real",
-                (
-                    "The model produced a strong "
-                    "real-image signal."
-                ),
-                real_score
-            )
-
-        return (
-            "uncertain",
-            (
-                "A real-image signal was detected, "
-                "but it is not strong enough for a "
-                "reliable classification."
-            ),
-            real_score
-        )
-
-    # --------------------------------------------------------
-    # Unknown
-    # --------------------------------------------------------
-
-    return (
-        "unknown",
-        (
-            "The model returned labels that TrustVerify "
-            "could not interpret."
-        ),
-        0.0
+    flags = ai_result.get(
+        "flags",
+        []
     )
 
+    if not isinstance(
+        flags,
+        list
+    ):
+
+        flags = []
+
+    model = ai_result.get(
+        "model"
+    )
+
+    if not model:
+
+        model = MODEL_NAME
+
+    return {
+
+        "available":
+            bool(
+                ai_result.get(
+                    "available",
+                    False
+                )
+            ),
+
+        "model":
+            str(model),
+
+        "prediction":
+            str(
+                ai_result.get(
+                    "prediction",
+                    "unknown"
+                )
+            ),
+
+        "ai_probability":
+            ai_result.get(
+                "ai_probability"
+            ),
+
+        "real_probability":
+            ai_result.get(
+                "real_probability"
+            ),
+
+        "confidence":
+            ai_result.get(
+                "confidence"
+            ),
+
+        "labels":
+            labels,
+
+        "ai_labels":
+            ai_labels,
+
+        "real_labels":
+            real_labels,
+
+        "flags":
+            flags,
+
+        "message":
+            ai_result.get(
+                "message"
+            ),
+
+        "error":
+            ai_result.get(
+                "error"
+            ),
+
+        "source":
+            "browser"
+    }
+
 
 # ============================================================
-# MAIN PUBLIC FUNCTION
+# MAIN AI FUNCTION
 # ============================================================
 
 def ai_analyze_image(
-    file_path: str
+    file_path: str,
+    external_result: Optional[
+        Dict[str, Any]
+    ] = None
 ) -> Dict[str, Any]:
 
-    result = {
+    """
+    Backend compatibility function.
 
-        "available": False,
+    No Torch.
+    No Transformers.
+    No model download.
 
-        "model": (
-            MODEL_NAME
-            if MODEL_NAME
-            else "not_configured"
-        ),
+    If browser AI output exists, it is normalized and returned.
 
-        "prediction": "unknown",
-
-        "ai_probability": None,
-
-        "real_probability": None,
-
-        "confidence": None,
-
-        "labels": [],
-
-        "ai_labels": [],
-
-        "real_labels": [],
-
-        "flags": [],
-
-        "message": None,
-
-        "error": None,
-
-        "image_info": {},
-
-        "screenshot_analysis": {
-            "possible": False,
-            "score": 0.0,
-            "signals": []
-        }
-    }
-
-    # ========================================================
-    # FILE VALIDATION
-    # ========================================================
-
-    if not file_path:
-
-        result["error"] = (
-            "No image path was provided."
-        )
-
-        result["message"] = (
-            "AI analysis could not start because "
-            "no image path was provided."
-        )
-
-        result["flags"].append(
-            "No image file was provided."
-        )
-
-        return result
-
-    if not os.path.isfile(
-        file_path
-    ):
-
-        result["error"] = (
-            "Image file does not exist."
-        )
-
-        result["message"] = (
-            "AI analysis could not start because "
-            "the image file does not exist."
-        )
-
-        result["flags"].append(
-            "Image file does not exist."
-        )
-
-        return result
-
-    # ========================================================
-    # IMAGE INFORMATION
-    # ========================================================
+    If not, TrustVerify safely reports that AI inference is
+    unavailable on the backend.
+    """
 
     image_info = _get_image_info(
         file_path
     )
 
-    result["image_info"] = image_info
-
     screenshot_analysis = (
         _detect_screenshot_characteristics(
-            file_path,
             image_info
         )
     )
 
-    result["screenshot_analysis"] = (
-        screenshot_analysis
-    )
-
-    if screenshot_analysis["possible"]:
-
-        result["flags"].append(
-            "Image has screenshot-like characteristics."
-        )
-
     # ========================================================
-    # LOAD MODEL
+    # BROWSER RESULT AVAILABLE
     # ========================================================
 
-    classifier = _load_model()
+    if external_result is not None:
 
-    if classifier is None:
-
-        result["message"] = (
-            "AI detection is currently unavailable."
+        result = normalize_external_ai_result(
+            external_result
         )
 
-        result["flags"].append(
-            "AI detector unavailable."
+        result["image_info"] = (
+            image_info
         )
 
-        if _model_error:
+        result["screenshot_analysis"] = (
+            screenshot_analysis
+        )
 
-            result["error"] = (
-                _model_error
+        if screenshot_analysis[
+            "possible"
+        ]:
+
+            if (
+                "Image has screenshot-like characteristics."
+                not in result["flags"]
+            ):
+
+                result["flags"].append(
+                    "Image has screenshot-like characteristics."
+                )
+
+            result["flags"].append(
+                "Screenshot context should be interpreted "
+                "with additional forensic evidence."
             )
 
         return result
 
     # ========================================================
-    # RUN MODEL
+    # NO BROWSER RESULT
     # ========================================================
 
-    try:
+    return {
 
-        predictions = classifier(
-            file_path,
-            top_k=2
-        )
+        "available":
+            False,
 
-    except Exception as error:
+        "model":
+            "browser-side AI detector",
 
-        result["error"] = str(
-            error
-        )
+        "prediction":
+            "unknown",
 
-        result["message"] = (
-            "The AI detector could not analyze "
-            "this image."
-        )
+        "ai_probability":
+            None,
 
-        result["flags"].append(
-            "AI analysis failed."
-        )
+        "real_probability":
+            None,
 
-        return result
+        "confidence":
+            None,
 
-    # ========================================================
-    # NORMALIZE
-    # ========================================================
+        "labels":
+            [],
 
-    predictions = _normalize_predictions(
-        predictions
-    )
+        "ai_labels":
+            [],
 
-    if not predictions:
+        "real_labels":
+            [],
 
-        result["message"] = (
-            "The AI detector returned no usable predictions."
-        )
+        "flags": [
 
-        result["flags"].append(
-            "No AI predictions returned."
-        )
+            "AI analysis was not supplied "
+            "by the browser."
+        ],
 
-        return result
-
-    result["labels"] = predictions
-    result["available"] = True
-
-    # ========================================================
-    # EXTRACT SCORES
-    # ========================================================
-
-    (
-        ai_score,
-        real_score,
-        ai_labels,
-        real_labels
-    ) = _extract_scores(
-        predictions
-    )
-
-    result["ai_labels"] = ai_labels
-    result["real_labels"] = real_labels
-
-    # ========================================================
-    # VERDICT
-    # ========================================================
-
-    (
-        verdict,
-        message,
-        confidence
-    ) = _determine_verdict(
-        ai_score,
-        real_score,
-        screenshot_analysis["possible"]
-    )
-
-    result["prediction"] = verdict
-    result["message"] = message
-
-    # ========================================================
-    # PROBABILITIES
-    # ========================================================
-
-    total = (
-        ai_score +
-        real_score
-    )
-
-    if total > 0:
-
-        result["ai_probability"] = round(
+        "message":
             (
-                ai_score /
-                total
-            ) * 100,
-            2
-        )
+                "Browser-side AI inference is required "
+                "for AI-generation analysis."
+            ),
 
-        result["real_probability"] = round(
-            (
-                real_score /
-                total
-            ) * 100,
-            2
-        )
+        "error":
+            None,
 
-    # ========================================================
-    # CONFIDENCE
-    # ========================================================
+        "image_info":
+            image_info,
 
-    result["confidence"] = round(
-        confidence * 100,
-        2
-    )
+        "screenshot_analysis":
+            screenshot_analysis,
 
-    # ========================================================
-    # FLAGS
-    # ========================================================
-
-    if verdict == "ai-generated":
-
-        result["flags"].append(
-            "Strong AI-generation signal."
-        )
-
-    elif verdict == "likely-real":
-
-        result["flags"].append(
-            "Strong real-image signal."
-        )
-
-    elif verdict == "uncertain":
-
-        result["flags"].append(
-            "AI detector evidence is inconclusive."
-        )
-
-    else:
-
-        result["flags"].append(
-            "AI detector could not establish "
-            "a reliable classification."
-        )
-
-    if not ai_labels:
-
-        result["flags"].append(
-            "No recognizable AI class label was returned."
-        )
-
-    if not real_labels:
-
-        result["flags"].append(
-            "No recognizable real class label was returned."
-        )
-
-    # ========================================================
-    # FINAL MESSAGE FOR SCREENSHOTS
-    # ========================================================
-
-    if screenshot_analysis["possible"]:
-
-        result["flags"].append(
-            "Screenshot-like images require additional "
-            "forensic evidence because this AI detector "
-            "was trained primarily on photographs."
-        )
-
-    return result
+        "source":
+            "browser-pending"
+    }
 
 
 # ============================================================
@@ -965,11 +555,27 @@ analyze_ai_image = ai_analyze_image
 if __name__ == "__main__":
 
     print(
-        "TRUSTVERIFY AI detector module loaded."
+        "=" * 60
     )
 
     print(
-        f"Configured model: {MODEL_NAME}"
+        "TRUSTVERIFY AI DETECTOR"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        "Backend AI model loading: DISABLED"
+    )
+
+    print(
+        "Backend inference engine: BROWSER"
+    )
+
+    print(
+        f"Browser model: {MODEL_NAME}"
     )
 
     print(
@@ -981,5 +587,5 @@ if __name__ == "__main__":
     )
 
     print(
-        "Public function: ai_analyze_image"
+        "=" * 60
     )
