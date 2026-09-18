@@ -1,0 +1,67 @@
+# ============================================================
+# FRONTEND
+# ============================================================
+
+node_modules/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+
+# Keep example environment files
+!.env.example
+
+
+# ============================================================
+# BACKEND
+# ============================================================
+
+backend/venv/
+backend/.venv/
+
+backend/__pycache__/
+backend/**/__pycache__/
+
+*.pyc
+*.pyo
+*.pyd
+
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+
+# ============================================================
+# GENERATED FILES
+# ============================================================
+
+backend/uploads/*
+backend/reports/*
+
+# Keep folders themselves
+!backend/uploads/.gitkeep
+!backend/reports/.gitkeep
+
+
+# ============================================================
+# OS / EDITOR
+# ============================================================
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+
+# ============================================================
+# LOGS
+# ============================================================
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
